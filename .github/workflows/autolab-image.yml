@@ -38,6 +38,12 @@ jobs:
           cp platform/autolab-config/school.yml autolab/config/school.yml
           cp autolab/config/environments/production.rb.template autolab/config/environments/production.rb
           cp platform/autolab-config/nginx.conf autolab/docker/nginx.conf
+          cp platform/autolab-config/precompile-assets.sh autolab/docker/precompile-assets.sh
+          # Scope public build placeholders to asset compilation, not image ENV.
+          sed -i \
+            -e '/^ENV SECRET_KEY_BASE=dummy_secret_key_base$/d' \
+            -e 's|^RUN RAILS_ENV=production bundle exec rails assets:precompile$|RUN sh docker/precompile-assets.sh|' \
+            autolab/Dockerfile
 
       - name: Install current Passenger repository signing key
         # The pinned Passenger base image predates the 2025 signing-key rotation.
