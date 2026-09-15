@@ -39,6 +39,18 @@ jobs:
           cp autolab/config/environments/production.rb.template autolab/config/environments/production.rb
           cp platform/autolab-config/nginx.conf autolab/docker/nginx.conf
 
+      - name: Install current Passenger repository signing key
+        # The pinned Passenger base image predates the 2025 signing-key rotation.
+        # Install the verified public key before upstream's first apt-get update.
+        run: |
+          curl --fail --silent --show-error --location \
+            https://oss-binaries.phusionpassenger.com/auto-software-signing-gpg-key-2025.txt \
+            --output "$RUNNER_TEMP/phusion-2025.asc"
+          fingerprint=$(gpg --batch --show-keys --with-colons "$RUNNER_TEMP/phusion-2025.asc" | awk -F: '$1 == "fpr" {print $10; exit}')
+          test "$fingerprint" = C6F448ED4BC80A4E95257250D870AB033FB45BD1
+          gpg --batch --yes --dearmor --output autolab/docker/phusion-2025.gpg "$RUNNER_TEMP/phusion-2025.asc"
+          sed -i '/^FROM /a COPY docker/phusion-2025.gpg /etc/apt/trusted.gpg.d/phusion-2025.gpg' autolab/Dockerfile
+
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
