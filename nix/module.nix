@@ -8,7 +8,8 @@ let
   cfg = config.services.grading-platform;
   tangoComposeFile = ../compose.tango.yaml;
   webComposeFile = ../compose.web.yaml;
-  playbook = ../ansible/grading-web.yml;
+  # Copy the whole tree: Ansible resolves files/ and templates/ beside the playbook.
+  playbook = "${../ansible}/grading-web.yml";
   compose = "${pkgs.docker-compose}/bin/docker-compose";
 in
 {

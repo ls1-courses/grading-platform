@@ -12,8 +12,10 @@ server {
 
   ssl_certificate {{ tls_certificate_file }};
   ssl_certificate_key {{ tls_certificate_key_file }};
-  include /etc/letsencrypt/options-ssl-nginx.conf;
-  ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
+  ssl_protocols TLSv1.2 TLSv1.3;
+  ssl_session_cache shared:grading_tls:10m;
+  ssl_session_timeout 1d;
+  ssl_session_tickets off;
 
   client_max_body_size 250m;
 
