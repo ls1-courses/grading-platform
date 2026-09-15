@@ -1,0 +1,18 @@
+[Unit]
+Description=Autolab grading website
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/etc/grading-platform
+ExecStart=/usr/bin/docker compose --env-file /etc/grading-platform/.env --file /etc/grading-platform/compose.yaml up --remove-orphans
+ExecStop=/usr/bin/docker compose --env-file /etc/grading-platform/.env --file /etc/grading-platform/compose.yaml down
+Restart=on-failure
+RestartSec=10
+TimeoutStartSec=0
+TimeoutStopSec=120
+
+[Install]
+WantedBy=multi-user.target

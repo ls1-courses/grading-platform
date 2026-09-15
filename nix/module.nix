@@ -6,21 +6,73 @@
 }:
 let
   cfg = config.services.grading-platform;
-  composeFile = ../compose.yaml;
+  tangoComposeFile = ../compose.tango.yaml;
+  webComposeFile = ../compose.web.yaml;
+  playbook = ../ansible/grading-web.yml;
   compose = "${pkgs.docker-compose}/bin/docker-compose";
 in
 {
   options.services.grading-platform = {
-    enable = lib.mkEnableOption "Autolab and Tango grading platform";
+    enable = lib.mkEnableOption "Tango and automatic provisioning of the Autolab web VM";
 
-    hostname = lib.mkOption {
+    tangoEnvironmentFile = lib.mkOption {
+      type = lib.types.path;
+      description = "Root-readable environment file for the local Tango stack.";
+    };
+
+    webEnvironmentFile = lib.mkOption {
+      type = lib.types.path;
+      description = "Root-readable environment file copied to the Autolab VM.";
+    };
+
+    deployKeyFile = lib.mkOption {
+      type = lib.types.path;
+      description = "Private SSH key used to provision the Autolab VM as deploy.";
+    };
+
+    webHost = lib.mkOption {
       type = lib.types.nonEmptyStr;
       default = "grading.dos.cit.tum.de";
     };
 
-    environmentFile = lib.mkOption {
-      type = lib.types.path;
-      description = "Root-readable environment file containing platform secrets and image references.";
+    webAddress = lib.mkOption {
+      type = lib.types.nonEmptyStr;
+      default = "172.24.89.4";
+      description = "Source address allowed to reach the Tango HTTPS endpoint.";
+    };
+
+    webHostPublicKey = lib.mkOption {
+      type = lib.types.nonEmptyStr;
+      default = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHHP3OZd4lhDqRwuUx+bH5AwMW8x6VB8VQRiBsDgUM+w";
+    };
+
+    tangoHostname = lib.mkOption {
+      type = lib.types.nonEmptyStr;
+      default = "astrid.dos.cit.tum.de";
+    };
+
+    tangoTlsCertificateFile = lib.mkOption {
+      type = lib.types.nonEmptyStr;
+      default = "/etc/pira-client/live/host:f:astrid.dos.cit.tum.de.fullchain.pem";
+      description = "Externally managed PIRA full certificate chain on Astrid.";
+    };
+
+    tangoTlsCertificateKeyFile = lib.mkOption {
+      type = lib.types.nonEmptyStr;
+      default = "/etc/pira-client/live/host:f:astrid.dos.cit.tum.de.privkey.pem";
+      description = "Externally managed PIRA private key on Astrid.";
+    };
+
+    webTlsCertificateFile = lib.mkOption {
+      type = lib.types.nonEmptyStr;
+      default = "/etc/pira-client/live/host:f:grading.dos.cit.tum.de.fullchain.pem";
+      description = "Externally managed PIRA full certificate chain on the web VM.";
+    };
+
+    webTlsCertificateKeyFile = lib.mkOption {
+      type = lib.types.nonEmptyStr;
+      default = "/etc/pira-client/live/host:f:grading.dos.cit.tum.de.privkey.pem";
+      description = "Externally managed PIRA private key on the web VM.";
     };
 
     kubernetesApi = lib.mkOption {
@@ -43,17 +95,22 @@ in
     assertions = [
       {
         assertion = config.services.k3s.enable && config.services.k3s.role == "server";
-        message = "The grading platform must run on the k3s server.";
+        message = "The Tango grading platform must run on the k3s server.";
       }
     ];
 
     virtualisation.docker.enable = true;
 
+    programs.ssh.knownHosts.${cfg.webHost} = {
+      hostNames = [ cfg.webHost ];
+      publicKey = cfg.webHostPublicKey;
+    };
+
     systemd.services.grading-platform-kubeconfig = {
       description = "Generate Tango's namespaced Kubernetes kubeconfig";
       after = [ "k3s.service" ];
       requires = [ "k3s.service" ];
-      before = [ "grading-platform.service" ];
+      before = [ "grading-tango.service" ];
       wantedBy = [ "multi-user.target" ];
       path = [
         config.services.k3s.package
@@ -97,8 +154,8 @@ in
       };
     };
 
-    systemd.services.grading-platform = {
-      description = "Autolab and Tango grading platform";
+    systemd.services.grading-tango = {
+      description = "Tango Kubernetes grading controller";
       after = [
         "docker.service"
         "grading-platform-kubeconfig.service"
@@ -110,11 +167,11 @@ in
       ];
       wants = [ "network-online.target" ];
       wantedBy = [ "multi-user.target" ];
-      environment.COMPOSE_PROJECT_NAME = "grading-platform";
+      environment.COMPOSE_PROJECT_NAME = "grading-tango";
       serviceConfig = {
         Type = "simple";
-        ExecStart = "${compose} --env-file ${cfg.environmentFile} -f ${composeFile} up --remove-orphans";
-        ExecStop = "${compose} --env-file ${cfg.environmentFile} -f ${composeFile} down";
+        ExecStart = "${compose} --env-file ${cfg.tangoEnvironmentFile} -f ${tangoComposeFile} up --remove-orphans";
+        ExecStop = "${compose} --env-file ${cfg.tangoEnvironmentFile} -f ${tangoComposeFile} down";
         Restart = "on-failure";
         RestartSec = 10;
         TimeoutStartSec = 0;
@@ -122,24 +179,89 @@ in
       };
     };
 
+    systemd.services.grading-web-provision = {
+      description = "Provision the Autolab Ubuntu VM";
+      after = [ "network-online.target" ];
+      wants = [ "network-online.target" ];
+      wantedBy = [ "multi-user.target" ];
+      path = [
+        pkgs.ansible
+        pkgs.openssh
+      ];
+      environment = {
+        ANSIBLE_HOST_KEY_CHECKING = "True";
+        ANSIBLE_NOCOLOR = "True";
+      };
+      script = ''
+        set -eu
+        ansible-playbook \
+          --inventory '${cfg.webHost},' \
+          --user deploy \
+          --private-key "$CREDENTIALS_DIRECTORY/deploy-key" \
+          --extra-vars "web_compose_file=${webComposeFile}" \
+          --extra-vars "web_environment_file=$CREDENTIALS_DIRECTORY/web-environment" \
+          --extra-vars "tls_certificate_file=${cfg.webTlsCertificateFile}" \
+          --extra-vars "tls_certificate_key_file=${cfg.webTlsCertificateKeyFile}" \
+          ${playbook}
+      '';
+      serviceConfig = {
+        Type = "oneshot";
+        LoadCredential = [
+          "deploy-key:${cfg.deployKeyFile}"
+          "web-environment:${cfg.webEnvironmentFile}"
+        ];
+      };
+    };
+
+    systemd.timers.grading-web-provision = {
+      description = "Regularly reconcile the Autolab Ubuntu VM";
+      wantedBy = [ "timers.target" ];
+      timerConfig = {
+        OnBootSec = "5min";
+        OnUnitActiveSec = "1d";
+        RandomizedDelaySec = "15min";
+        Persistent = true;
+      };
+    };
+
     services.nginx = {
       enable = true;
       recommendedProxySettings = true;
       recommendedTlsSettings = true;
-      virtualHosts.${cfg.hostname} = {
-        enableACME = true;
-        forceSSL = true;
-        locations."/" = {
-          proxyPass = "http://127.0.0.1:8080";
-          proxyWebsockets = true;
+      virtualHosts = {
+        ${cfg.tangoHostname} = {
+          onlySSL = true;
+          sslCertificate = cfg.tangoTlsCertificateFile;
+          sslCertificateKey = cfg.tangoTlsCertificateKeyFile;
+          locations."/".return = "404";
+        };
+        grading-tango-api = {
+          serverName = cfg.tangoHostname;
+          onlySSL = true;
+          sslCertificate = cfg.tangoTlsCertificateFile;
+          sslCertificateKey = cfg.tangoTlsCertificateKeyFile;
+          listen = [
+            {
+              addr = "0.0.0.0";
+              port = 3000;
+              ssl = true;
+            }
+            {
+              addr = "[::]";
+              port = 3000;
+              ssl = true;
+            }
+          ];
+          locations."/" = {
+            proxyPass = "http://127.0.0.1:3001";
+            extraConfig = ''
+              allow ${cfg.webAddress};
+              deny all;
+            '';
+          };
         };
       };
     };
 
-    security.acme.acceptTerms = true;
-    networking.firewall.allowedTCPPorts = [
-      80
-      443
-    ];
   };
 }

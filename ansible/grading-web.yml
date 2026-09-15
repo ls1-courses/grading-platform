@@ -1,0 +1,146 @@
+---
+- name: Provision the Autolab web VM
+  hosts: all
+  become: true
+  vars:
+    grading_directory: /etc/grading-platform
+    tls_certificate_file: /etc/pira-client/live/host:f:grading.dos.cit.tum.de.fullchain.pem
+    tls_certificate_key_file: /etc/pira-client/live/host:f:grading.dos.cit.tum.de.privkey.pem
+  tasks:
+    - name: Install platform packages
+      ansible.builtin.apt:
+        name:
+          - docker-compose-v2
+          - docker.io
+          - nginx
+          - unattended-upgrades
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Enable automatic security updates
+      ansible.builtin.systemd_service:
+        name: unattended-upgrades.service
+        enabled: true
+        state: started
+
+    - name: Create deployment directory
+      ansible.builtin.file:
+        path: "{{ grading_directory }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+
+    - name: Install Compose definition
+      ansible.builtin.copy:
+        src: "{{ web_compose_file }}"
+        dest: "{{ grading_directory }}/compose.yaml"
+        owner: root
+        group: root
+        mode: "0644"
+      notify: Restart grading web
+
+    - name: Install application environment
+      ansible.builtin.copy:
+        src: "{{ web_environment_file }}"
+        dest: "{{ grading_directory }}/.env"
+        owner: root
+        group: root
+        mode: "0600"
+      no_log: true
+      notify: Restart grading web
+
+    - name: Install grading web systemd service
+      ansible.builtin.copy:
+        src: grading-web.service
+        dest: /etc/systemd/system/grading-web.service
+        owner: root
+        group: root
+        mode: "0644"
+      notify:
+        - Reload systemd
+        - Restart grading web
+
+    - name: Check externally managed TLS files
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - "{{ tls_certificate_file }}"
+        - "{{ tls_certificate_key_file }}"
+      register: tls_files
+
+    - name: Require externally managed TLS files
+      ansible.builtin.assert:
+        that: tls_files.results | map(attribute='stat.exists') | min
+        fail_msg: >-
+          Install the PIRA certificate and key at {{ tls_certificate_file }} and
+          {{ tls_certificate_key_file }} before provisioning this VM.
+
+    - name: Enable nginx site
+      ansible.builtin.file:
+        src: /etc/nginx/sites-available/grading.conf
+        dest: /etc/nginx/sites-enabled/grading.conf
+        state: link
+      notify: Reload nginx
+
+    - name: Disable default nginx site
+      ansible.builtin.file:
+        path: /etc/nginx/sites-enabled/default
+        state: absent
+      notify: Reload nginx
+
+    - name: Enable and start grading web
+      ansible.builtin.systemd_service:
+        name: grading-web.service
+        enabled: true
+        state: started
+        daemon_reload: true
+
+    - name: Install TLS nginx configuration
+      ansible.builtin.template:
+        src: nginx-tls.conf.j2
+        dest: /etc/nginx/sites-available/grading.conf
+        owner: root
+        group: root
+        mode: "0644"
+      notify: Reload nginx
+
+    - name: Run database migrations
+      ansible.builtin.command:
+        argv:
+          - docker
+          - compose
+          - --env-file
+          - "{{ grading_directory }}/.env"
+          - --file
+          - "{{ grading_directory }}/compose.yaml"
+          - exec
+          - -T
+          - autolab
+          - bundle
+          - exec
+          - rails
+          - db:prepare
+      register: migrate
+      retries: 12
+      delay: 5
+      until: migrate.rc == 0
+      changed_when: false
+
+  handlers:
+    - name: Reload systemd
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+
+    - name: Restart grading web
+      ansible.builtin.systemd_service:
+        name: grading-web.service
+        state: restarted
+        daemon_reload: true
+
+    - name: Reload nginx
+      ansible.builtin.systemd_service:
+        name: nginx.service
+        enabled: true
+        state: reloaded

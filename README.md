@@ -4,18 +4,20 @@ Deployment definition for the Autolab installation at
 `https://grading.dos.cit.tum.de`. This repository contains no courses,
 assignments, submissions, or private tests.
 
-The trusted stack runs on Astrid with Docker Compose:
+The trusted services are split across two machines:
 
-- Autolab is the only service published on the host, at `127.0.0.1:8080`;
-- host nginx terminates TLS and proxies the public hostname to Autolab;
-- Tango, Redis, and MySQL are reachable only on the internal Compose network;
+- the Ubuntu 26.04 VM at `grading.dos.cit.tum.de` runs Autolab, MySQL, and the
+  public nginx/TLS endpoint;
+- Astrid runs Tango and Redis, with Tango bound only to localhost behind an
+  nginx HTTPS endpoint that accepts the web VM's address;
 - Tango has no Docker socket and uses a least-privilege kubeconfig to create
   short-lived Jobs and Secrets in the `grading` namespace;
-- persistent Docker volumes hold the database and Autolab/Tango state.
+- persistent Docker volumes hold each machine's application state.
 
-`flake.nix` exports the NixOS module that owns Docker, the systemd Compose
-unit, the runtime kubeconfig, nginx, ACME, and ports 80/443. The cluster-config
-repository imports this module and supplies its SOPS-managed environment file.
+`flake.nix` exports the NixOS module used on Astrid. It owns Tango, the runtime
+kubeconfig, the restricted HTTPS proxy, and an Ansible systemd service that
+reconciles the Ubuntu VM. The cluster-config repository supplies the deploy key
+and both SOPS-managed environment files through systemd credentials.
 
 The Autolab image is built from upstream v3.0.2 commit
 `96006d532a392eeca2d350d1811f8e8ab9625bda`. The workflow adds only the
@@ -25,17 +27,26 @@ in GHCR so neither Tango nor grading Jobs need registry credentials.
 
 ## First deployment
 
-Do not put `.env` on the host. The NixOS configuration materializes the same
-variables from SOPS as `/run/secrets/grading-platform.env` and generates
-`/run/grading/tango.kubeconfig` from the namespaced ServiceAccount.
+The VM must initially contain the dedicated public key for its `deploy` user.
+Astrid pins its SSH host key and uses the encrypted private key from the
+cluster-config repository. PIRA owns certificate enrollment and renewal. Its
+full-chain and private-key files must exist under `/etc/pira-client/live/` on
+both hosts before deployment. The playbook installs Docker, Compose, nginx, and
+unattended upgrades; installs the pinned Compose definition and secrets; starts
+Autolab/MySQL; and runs migrations.
 
-After the NixOS service has started the stack, initialize the database and the
-first administrator once:
+The NixOS configuration generates `/run/grading/tango.kubeconfig` from the
+namespaced ServiceAccount. It never transfers that credential to the web VM.
+
+Database migrations are automatic. Creating the first administrator remains a
+one-time application action on the VM:
 
 ```console
-docker compose --env-file /run/secrets/grading-platform.env exec autolab \
+sudo docker compose --env-file /etc/grading-platform/.env \
+  --file /etc/grading-platform/compose.yaml exec autolab \
   bundle exec rails db:prepare
-docker compose --env-file /run/secrets/grading-platform.env exec autolab \
+sudo docker compose --env-file /etc/grading-platform/.env \
+  --file /etc/grading-platform/compose.yaml exec autolab \
   bundle exec rails admin:create_root_user[EMAIL,PASSWORD,FIRST,LAST]
 ```
 
