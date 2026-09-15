@@ -1,0 +1,10 @@
+production:
+  adapter: mysql2
+  database: <%= ENV.fetch("MYSQL_DATABASE") %>
+  pool: <%= ENV.fetch("RAILS_MAX_THREADS", 5) %>
+  username: <%= ENV.fetch("MYSQL_USER") %>
+  password: <%= ENV.fetch("MYSQL_PASSWORD") %>
+  host: <%= ENV.fetch("MYSQL_HOST", "mysql") %>
+  port: <%= ENV.fetch("MYSQL_PORT", 3306) %>
+  variables:
+    sql_mode: NO_ENGINE_SUBSTITUTION

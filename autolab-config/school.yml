@@ -1,0 +1,5 @@
+production:
+  school_name: "Technical University of Munich"
+  school_short_name: "TUM"
+  support_email: "grading@dos.cit.tum.de"
+  tech_email: "grading@dos.cit.tum.de"

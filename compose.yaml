@@ -1,0 +1,100 @@
+name: grading-platform
+
+services:
+  mysql:
+    image: mysql:8.4.11@sha256:85b9bf2e29cf836ecb8c2a15a935d4ba0c606631dff1dd79531a11983c638f2a
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE:?required}
+      MYSQL_USER: ${MYSQL_USER:?required}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?required}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?required}
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u root -p$$MYSQL_ROOT_PASSWORD"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    networks: [backend]
+
+  redis:
+    image: redis:7.4.11-alpine@sha256:ff02b58f971e7d7d156a1267e283fcbbeee91773b6aa36c49dac28ecfe28eadf
+    restart: unless-stopped
+    command: ["redis-server", "--save", "60", "1", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+    networks: [backend]
+
+  tango:
+    image: ${TANGO_IMAGE:?required}
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      DOCKER_DEPLOYMENT: grading
+      DOCKER_REDIS_HOSTNAME: redis
+      RESTFUL_KEY: ${RESTFUL_KEY:?required}
+      VMMS_NAME: kubernetes
+      REUSE_VMS: "false"
+      KUBERNETES_KUBECONFIG: /run/secrets/tango.kubeconfig
+      KUBERNETES_NAMESPACE: grading
+      KUBERNETES_RUNTIME_CLASS: grading-runsc
+      KUBERNETES_SERVICE_ACCOUNT: grading-job
+      KUBERNETES_INPUT_LIMIT: "716800"
+      KUBERNETES_MAX_CONCURRENT_JOBS: "1"
+    volumes:
+      - tango-data:/opt/TangoService/Tango/courselabs
+      - /run/grading/tango.kubeconfig:/run/secrets/tango.kubeconfig:ro
+    networks: [backend]
+
+  autolab:
+    image: ${AUTOLAB_IMAGE:?required}
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+      tango:
+        condition: service_started
+    ports:
+      - "127.0.0.1:8080:80"
+    environment:
+      RAILS_ENV: production
+      DOCKER_SSL: "false"
+      MYSQL_DATABASE: ${MYSQL_DATABASE:?required}
+      MYSQL_HOST: mysql
+      MYSQL_PORT: "3306"
+      MYSQL_USER: ${MYSQL_USER:?required}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?required}
+      RESTFUL_HOST: tango
+      RESTFUL_PORT: "3000"
+      RESTFUL_KEY: ${RESTFUL_KEY:?required}
+      SECRET_KEY_BASE: ${SECRET_KEY_BASE:?required}
+      LOCKBOX_MASTER_KEY: ${LOCKBOX_MASTER_KEY:?required}
+      DEVISE_SECRET_KEY: ${DEVISE_SECRET_KEY:?required}
+      DEFAULT_URL_HOST: grading.dos.cit.tum.de
+      DEFAULT_URL_PORT: NONE
+    volumes:
+      - autolab-courses:/home/app/webapp/courses
+      - autolab-course-config:/home/app/webapp/courseConfig
+      - autolab-assessment-config:/home/app/webapp/assessmentConfig
+      - autolab-storage:/home/app/webapp/storage
+    networks: [backend]
+
+networks:
+  backend:
+
+volumes:
+  mysql-data:
+  redis-data:
+  tango-data:
+  autolab-courses:
+  autolab-course-config:
+  autolab-assessment-config:
+  autolab-storage:
