@@ -43,6 +43,8 @@ services:
       DEFAULT_URL_HOST: grading.dos.cit.tum.de
       DEFAULT_URL_PORT: NONE
     volumes:
+      - /etc/grading-platform/tango-ca.crt:/usr/local/share/ca-certificates/tango-ca.crt:ro
+      - /etc/grading-platform/tango-trust.sh:/etc/my_init.d/10-tango-trust.sh:ro
       - autolab-courses:/home/app/webapp/courses
       - autolab-course-config:/home/app/webapp/courseConfig
       - autolab-assessment-config:/home/app/webapp/assessmentConfig

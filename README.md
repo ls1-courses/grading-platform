@@ -29,14 +29,38 @@ in GHCR so neither Tango nor grading Jobs need registry credentials.
 
 The VM must initially contain the dedicated public key for its `deploy` user.
 Astrid pins its SSH host key and uses the encrypted private key from the
-cluster-config repository. PIRA owns certificate enrollment and renewal. Its
-full-chain and private-key files must exist under `/etc/pira-client/live/` on
-both hosts before deployment. The playbook installs Docker, Compose, nginx, and
+cluster-config repository. PIRA owns the public website's certificate enrollment
+and renewal on the Ubuntu VM. The defaults use the files you listed:
+`/etc/pira-client/live/host:f:dosvm6.cit.tum.de.fullchain.pem` and
+`/etc/pira-client/live/host:f:dosvm6.cit.tum.de.privkey.pem`. That certificate must
+cover `grading.dos.cit.tum.de`. The playbook installs Docker, Compose, nginx, and
 unattended upgrades; installs the pinned Compose definition and secrets; starts
 Autolab/MySQL; and runs migrations.
 
 The NixOS configuration generates `/run/grading/tango.kubeconfig` from the
 namespaced ServiceAccount. It never transfers that credential to the web VM.
+
+### Internal Tango TLS
+
+Astrid generates a self-signed CA in `/var/lib/grading-tls` on first activation.
+It issues a 90-day server certificate for `astrid.dos.cit.tum.de`, checking daily
+and renewing when fewer than 30 days remain. nginx reloads after renewal.
+The CA lasts ten years; back up this directory securely and replace the CA
+before it expires. Its private key and the server private key stay on Astrid.
+
+Provisioning copies only `ca.crt` over the authenticated SSH connection to the
+VM. Autolab mounts it read-only and installs it into the container's system
+trust store before the application starts. Certificate and hostname verification
+remain enabled. Tango's nginx endpoint listens on port 3000 and permits only the
+web VM's source address. No PIRA certificate or ACME service is needed on Astrid.
+
+After deployment, test the actual Autolab client from the VM:
+
+```console
+sudo docker compose --env-file /etc/grading-platform/.env \
+  --file /etc/grading-platform/compose.yaml exec autolab \
+  bundle exec rails runner 'require Rails.root.join("lib/tango_client"); puts TangoClient.info'
+```
 
 Database migrations are automatic. Creating the first administrator remains a
 one-time application action on the VM:

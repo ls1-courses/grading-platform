@@ -4,8 +4,8 @@
   become: true
   vars:
     grading_directory: /etc/grading-platform
-    tls_certificate_file: /etc/pira-client/live/host:f:grading.dos.cit.tum.de.fullchain.pem
-    tls_certificate_key_file: /etc/pira-client/live/host:f:grading.dos.cit.tum.de.privkey.pem
+    tls_certificate_file: /etc/pira-client/live/host:f:dosvm6.cit.tum.de.fullchain.pem
+    tls_certificate_key_file: /etc/pira-client/live/host:f:dosvm6.cit.tum.de.privkey.pem
   tasks:
     - name: Install platform packages
       ansible.builtin.apt:
@@ -31,6 +31,24 @@
         owner: root
         group: root
         mode: "0700"
+
+    - name: Install public Tango CA certificate
+      ansible.builtin.copy:
+        src: "{{ tango_ca_file }}"
+        dest: "{{ grading_directory }}/tango-ca.crt"
+        owner: root
+        group: root
+        mode: "0644"
+      notify: Restart grading web
+
+    - name: Install Autolab trust initialization
+      ansible.builtin.copy:
+        src: tango-trust.sh
+        dest: "{{ grading_directory }}/tango-trust.sh"
+        owner: root
+        group: root
+        mode: "0755"
+      notify: Restart grading web
 
     - name: Install Compose definition
       ansible.builtin.copy:
@@ -77,6 +95,15 @@
           Install the PIRA certificate and key at {{ tls_certificate_file }} and
           {{ tls_certificate_key_file }} before provisioning this VM.
 
+    - name: Install TLS nginx configuration
+      ansible.builtin.template:
+        src: nginx-tls.conf.j2
+        dest: /etc/nginx/sites-available/grading.conf
+        owner: root
+        group: root
+        mode: "0644"
+      notify: Reload nginx
+
     - name: Enable nginx site
       ansible.builtin.file:
         src: /etc/nginx/sites-available/grading.conf
@@ -97,14 +124,8 @@
         state: started
         daemon_reload: true
 
-    - name: Install TLS nginx configuration
-      ansible.builtin.template:
-        src: nginx-tls.conf.j2
-        dest: /etc/nginx/sites-available/grading.conf
-        owner: root
-        group: root
-        mode: "0644"
-      notify: Reload nginx
+    - name: Apply application changes before migrations
+      ansible.builtin.meta: flush_handlers
 
     - name: Run database migrations
       ansible.builtin.command:

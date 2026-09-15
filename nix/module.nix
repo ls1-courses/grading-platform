@@ -53,25 +53,25 @@ in
 
     tangoTlsCertificateFile = lib.mkOption {
       type = lib.types.nonEmptyStr;
-      default = "/etc/pira-client/live/host:f:astrid.dos.cit.tum.de.fullchain.pem";
-      description = "Externally managed PIRA full certificate chain on Astrid.";
+      default = "/var/lib/grading-tls/server.crt";
+      description = "Locally issued Tango certificate on Astrid.";
     };
 
     tangoTlsCertificateKeyFile = lib.mkOption {
       type = lib.types.nonEmptyStr;
-      default = "/etc/pira-client/live/host:f:astrid.dos.cit.tum.de.privkey.pem";
-      description = "Externally managed PIRA private key on Astrid.";
+      default = "/var/lib/grading-tls/server.key";
+      description = "Locally generated Tango private key on Astrid.";
     };
 
     webTlsCertificateFile = lib.mkOption {
       type = lib.types.nonEmptyStr;
-      default = "/etc/pira-client/live/host:f:grading.dos.cit.tum.de.fullchain.pem";
+      default = "/etc/pira-client/live/host:f:dosvm6.cit.tum.de.fullchain.pem";
       description = "Externally managed PIRA full certificate chain on the web VM.";
     };
 
     webTlsCertificateKeyFile = lib.mkOption {
       type = lib.types.nonEmptyStr;
-      default = "/etc/pira-client/live/host:f:grading.dos.cit.tum.de.privkey.pem";
+      default = "/etc/pira-client/live/host:f:dosvm6.cit.tum.de.privkey.pem";
       description = "Externally managed PIRA private key on the web VM.";
     };
 
@@ -100,6 +100,41 @@ in
     ];
 
     virtualisation.docker.enable = true;
+
+    # Only the public CA certificate is sent to Autolab. Both private keys
+    # remain on Astrid, outside the Nix store.
+    systemd.services.grading-tls = {
+      description = "Issue and renew the internal Tango TLS certificate";
+      before = [ "nginx.service" "grading-web-provision.service" ];
+      wantedBy = [ "multi-user.target" ];
+      path = [ pkgs.openssl pkgs.coreutils pkgs.systemd ];
+      environment = {
+        TANGO_HOSTNAME = cfg.tangoHostname;
+        TANGO_CERTIFICATE = cfg.tangoTlsCertificateFile;
+        TANGO_PRIVATE_KEY = cfg.tangoTlsCertificateKeyFile;
+      };
+      script = builtins.readFile ./tango-tls.sh;
+      serviceConfig = {
+        Type = "oneshot";
+        StateDirectory = "grading-tls";
+        StateDirectoryMode = "0700";
+        UMask = "0077";
+      };
+    };
+
+    systemd.timers.grading-tls = {
+      wantedBy = [ "timers.target" ];
+      timerConfig = {
+        OnCalendar = "daily";
+        RandomizedDelaySec = "1h";
+        Persistent = true;
+      };
+    };
+
+    systemd.services.nginx = {
+      requires = [ "grading-tls.service" ];
+      after = [ "grading-tls.service" ];
+    };
 
     programs.ssh.knownHosts.${cfg.webHost} = {
       hostNames = [ cfg.webHost ];
@@ -181,7 +216,8 @@ in
 
     systemd.services.grading-web-provision = {
       description = "Provision the Autolab Ubuntu VM";
-      after = [ "network-online.target" ];
+      after = [ "network-online.target" "grading-tls.service" ];
+      requires = [ "grading-tls.service" ];
       wants = [ "network-online.target" ];
       wantedBy = [ "multi-user.target" ];
       path = [
@@ -200,6 +236,7 @@ in
           --private-key "$CREDENTIALS_DIRECTORY/deploy-key" \
           --extra-vars "web_compose_file=${webComposeFile}" \
           --extra-vars "web_environment_file=$CREDENTIALS_DIRECTORY/web-environment" \
+          --extra-vars "tango_ca_file=/var/lib/grading-tls/ca.crt" \
           --extra-vars "tls_certificate_file=${cfg.webTlsCertificateFile}" \
           --extra-vars "tls_certificate_key_file=${cfg.webTlsCertificateKeyFile}" \
           ${playbook}
@@ -229,17 +266,13 @@ in
       recommendedProxySettings = true;
       recommendedTlsSettings = true;
       virtualHosts = {
-        ${cfg.tangoHostname} = {
-          onlySSL = true;
-          sslCertificate = cfg.tangoTlsCertificateFile;
-          sslCertificateKey = cfg.tangoTlsCertificateKeyFile;
-          locations."/".return = "404";
-        };
         grading-tango-api = {
           serverName = cfg.tangoHostname;
           onlySSL = true;
           sslCertificate = cfg.tangoTlsCertificateFile;
           sslCertificateKey = cfg.tangoTlsCertificateKeyFile;
+          # Tango includes its API key in request URLs.
+          extraConfig = "access_log off;";
           listen = [
             {
               addr = "0.0.0.0";
