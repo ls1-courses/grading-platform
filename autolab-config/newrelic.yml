@@ -1,0 +1,11 @@
+# This installation does not use New Relic or its outbound telemetry.
+common: &defaults
+  agent_enabled: false
+  monitor_mode: false
+
+production:
+  <<: *defaults
+development:
+  <<: *defaults
+test:
+  <<: *defaults

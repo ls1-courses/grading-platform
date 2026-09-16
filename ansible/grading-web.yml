@@ -138,6 +138,8 @@
           - "{{ grading_directory }}/compose.yaml"
           - exec
           - -T
+          - --user
+          - app
           - autolab
           - bundle
           - exec

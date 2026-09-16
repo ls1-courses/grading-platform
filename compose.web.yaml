@@ -28,6 +28,7 @@ services:
       - "127.0.0.1:8080:80"
     environment:
       RAILS_ENV: production
+      NEW_RELIC_AGENT_ENABLED: "false"
       DOCKER_SSL: "false"
       MYSQL_DATABASE: ${MYSQL_DATABASE:?required}
       MYSQL_HOST: mysql

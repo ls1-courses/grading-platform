@@ -36,13 +36,17 @@ jobs:
           cp platform/autolab-config/database.yml autolab/config/database.yml
           cp platform/autolab-config/autogradeConfig.rb autolab/config/autogradeConfig.rb
           cp platform/autolab-config/school.yml autolab/config/school.yml
+          cp platform/autolab-config/newrelic.yml autolab/config/newrelic.yml
           cp autolab/config/environments/production.rb.template autolab/config/environments/production.rb
           cp platform/autolab-config/nginx.conf autolab/docker/nginx.conf
           cp platform/autolab-config/precompile-assets.sh autolab/docker/precompile-assets.sh
+          cp platform/autolab-config/autolab-volumes.sh autolab/docker/autolab-volumes.sh
           # Scope public build placeholders to asset compilation, not image ENV.
           sed -i \
+            -e '/^FROM /a COPY --chmod=0755 docker/autolab-volumes.sh /etc/my_init.d/20-autolab-volumes.sh' \
             -e '/^ENV SECRET_KEY_BASE=dummy_secret_key_base$/d' \
             -e 's|^RUN RAILS_ENV=production bundle exec rails assets:precompile$|RUN sh docker/precompile-assets.sh|' \
+            -e '/^RUN rm \/etc\/nginx\/sites-enabled\/default$/a COPY docker/nginx.conf /etc/nginx/sites-enabled/autolab.conf' \
             autolab/Dockerfile
 
       - name: Install current Passenger repository signing key
