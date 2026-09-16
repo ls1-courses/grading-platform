@@ -4,6 +4,10 @@
   become: true
   vars:
     grading_directory: /etc/grading-platform
+    ansible_async_dir: "{{ grading_directory }}/.ansible_async"
+    grading_image_pull_timeout: 1800
+    grading_startup_retries: 60
+    grading_startup_delay: 5
     tls_certificate_file: /etc/pira-client/live/host:f:dosvm6.cit.tum.de.fullchain.pem
     tls_certificate_key_file: /etc/pira-client/live/host:f:dosvm6.cit.tum.de.privkey.pem
   tasks:
@@ -117,6 +121,27 @@
         state: absent
       notify: Reload nginx
 
+    - name: Pull application images before starting services
+      ansible.builtin.command:
+        argv:
+          - docker
+          - compose
+          - --env-file
+          - "{{ grading_directory }}/.env"
+          - --file
+          - "{{ grading_directory }}/compose.yaml"
+          - pull
+          - --quiet
+      # Initial downloads can take several minutes. Keep the task attached so
+      # pull failures stop provisioning here, rather than surfacing as missing
+      # containers in the migration task. Cached pulls are safe to repeat.
+      async: "{{ grading_image_pull_timeout }}"
+      poll: 10
+      changed_when: false
+
+    - name: Apply application changes before startup checks
+      ansible.builtin.meta: flush_handlers
+
     - name: Enable and start grading web
       ansible.builtin.systemd_service:
         name: grading-web.service
@@ -124,8 +149,35 @@
         state: started
         daemon_reload: true
 
-    - name: Apply application changes before migrations
-      ansible.builtin.meta: flush_handlers
+    - name: Wait for Autolab startup and writable application volumes
+      # Compose starts Autolab only after MySQL's healthcheck passes. Docker
+      # exec also confirms the container is running, and testing as app waits
+      # for the volume-ownership initialization needed by Rails to finish.
+      ansible.builtin.command:
+        argv:
+          - docker
+          - compose
+          - --env-file
+          - "{{ grading_directory }}/.env"
+          - --file
+          - "{{ grading_directory }}/compose.yaml"
+          - exec
+          - -T
+          - --user
+          - app
+          - autolab
+          - sh
+          - -ec
+          - >-
+            test -w /home/app/webapp/courses &&
+            test -w /home/app/webapp/courseConfig &&
+            test -w /home/app/webapp/assessmentConfig &&
+            test -w /home/app/webapp/storage
+      register: autolab_ready
+      retries: "{{ grading_startup_retries }}"
+      delay: "{{ grading_startup_delay }}"
+      until: autolab_ready.rc == 0
+      changed_when: false
 
     - name: Run database migrations
       ansible.builtin.command:
@@ -145,10 +197,6 @@
           - exec
           - rails
           - db:prepare
-      register: migrate
-      retries: 12
-      delay: 5
-      until: migrate.rc == 0
       changed_when: false
 
   handlers:
